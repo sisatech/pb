@@ -10,6 +10,9 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+
+	"github.com/djherbis/buffer"
+	"github.com/djherbis/nio"
 )
 
 // Current version
@@ -49,6 +52,7 @@ func New64(total int64) *ProgressBar {
 		ManualUpdate:    false,
 		finish:          make(chan struct{}),
 	}
+	pb.pr, pb.pw = nio.Pipe(buffer.New(1024 * 1024))
 	return pb.Format(FORMAT)
 }
 
@@ -66,6 +70,12 @@ func StartNew(total int) *ProgressBar {
 type Callback func(out string)
 
 type ProgressBar struct {
+	// print pipe buffer
+	written int64
+	echoed  int64
+	pr      *nio.PipeReader
+	pw      *nio.PipeWriter
+
 	current  int64 // current must be first member of struct (https://code.google.com/p/go/issues/detail?id=5278)
 	previous int64
 
@@ -167,6 +177,11 @@ func (pb *ProgressBar) Prefix(prefix string) *ProgressBar {
 func (pb *ProgressBar) Postfix(postfix string) *ProgressBar {
 	pb.postfix = postfix
 	return pb
+}
+
+func (pb *ProgressBar) Println(s string) {
+	fmt.Fprint(pb.pw, s+"\n")
+	pb.written += int64(len(s)) + 1
 }
 
 // Set custom format for bar
@@ -404,15 +419,32 @@ func (pb *ProgressBar) write(total, current int64) {
 	pb.lastPrint = out + end
 	isFinish := pb.isFinish
 
+	printer := func() string {
+		written := pb.written
+		cursor := pb.echoed
+		if cursor == written {
+			return ""
+		}
+
+		len := written - cursor
+		buf := make([]byte, len, len)
+		pb.pr.Read(buf)
+		return string(buf)
+	}
+
 	switch {
 	case isFinish:
 		return
 	case pb.Output != nil:
-		fmt.Fprint(pb.Output, "\r"+out+end)
+		extra := printer()
+		fmt.Fprint(pb.Output, "\r"+strings.Repeat(" ", width))
+		fmt.Fprint(pb.Output, "\r"+extra+out+end)
 	case pb.Callback != nil:
 		pb.Callback(out + end)
 	case !pb.NotPrint:
-		fmt.Print("\r" + out + end)
+		extra := printer()
+		fmt.Fprint(pb.Output, "\r"+strings.Repeat(" ", width))
+		fmt.Print("\r" + extra + out + end)
 	}
 }
 
