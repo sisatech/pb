@@ -428,7 +428,8 @@ func (pb *ProgressBar) write(total, current int64) {
 
 		len := written - cursor
 		buf := make([]byte, len, len)
-		pb.pr.Read(buf)
+		n, _ := pb.pr.Read(buf)
+		pb.echoed += int64(n)
 		return string(buf)
 	}
 
